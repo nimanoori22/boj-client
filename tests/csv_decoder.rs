@@ -5,8 +5,8 @@ use boj_client::error::BojError;
 use boj_client::query::{CodeQuery, Format, Frequency, Language, LayerQuery, MetadataQuery};
 use common::{StubResponse, StubServer, fixture_bytes};
 
-#[test]
-fn decodes_utf8_csv_code_response() {
+#[tokio::test]
+async fn decodes_utf8_csv_code_response() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_success_en_utf8.csv"),
@@ -20,7 +20,7 @@ fn decodes_utf8_csv_code_response() {
         .with_format(Format::Csv)
         .with_lang(Language::En);
 
-    let response = client.get_data_code(&query).unwrap();
+    let response = client.get_data_code(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -31,8 +31,8 @@ fn decodes_utf8_csv_code_response() {
     assert_eq!(response.series[0].points[1].value, None);
 }
 
-#[test]
-fn decodes_utf8_csv_layer_response() {
+#[tokio::test]
+async fn decodes_utf8_csv_layer_response() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_success_en_utf8.csv"),
@@ -46,7 +46,7 @@ fn decodes_utf8_csv_layer_response() {
         .with_format(Format::Csv)
         .with_lang(Language::En);
 
-    let response = client.get_data_layer(&query).unwrap();
+    let response = client.get_data_layer(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -54,8 +54,8 @@ fn decodes_utf8_csv_layer_response() {
     assert_eq!(response.series[0].series_code, "TK99F1000601GCQ01000");
 }
 
-#[test]
-fn decodes_shift_jis_csv() {
+#[tokio::test]
+async fn decodes_shift_jis_csv() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_success_jp_shiftjis.csv"),
@@ -69,7 +69,7 @@ fn decodes_shift_jis_csv() {
         .with_format(Format::Csv)
         .with_lang(Language::Jp);
 
-    let response = client.get_data_code(&query).unwrap();
+    let response = client.get_data_code(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -79,8 +79,8 @@ fn decodes_shift_jis_csv() {
     );
 }
 
-#[test]
-fn handles_utf8_bom_in_csv_header() {
+#[tokio::test]
+async fn handles_utf8_bom_in_csv_header() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_success_jp_utf8_bom.csv"),
@@ -94,15 +94,15 @@ fn handles_utf8_bom_in_csv_header() {
         .with_format(Format::Csv)
         .with_lang(Language::En);
 
-    let response = client.get_data_code(&query).unwrap();
+    let response = client.get_data_code(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
     assert_eq!(response.meta.message_id, "M181000I");
 }
 
-#[test]
-fn utf8_decode_fails_for_shift_jis_payload() {
+#[tokio::test]
+async fn utf8_decode_fails_for_shift_jis_payload() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_success_jp_shiftjis.csv"),
@@ -116,14 +116,14 @@ fn utf8_decode_fails_for_shift_jis_payload() {
         .with_format(Format::Csv)
         .with_lang(Language::En);
 
-    let result = client.get_data_code(&query);
+    let result = client.get_data_code(&query).await;
     let _ = server.finish();
 
     assert!(matches!(result, Err(BojError::DecodeError(_))));
 }
 
-#[test]
-fn decodes_metadata_csv() {
+#[tokio::test]
+async fn decodes_metadata_csv() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_success_metadata_en_utf8.csv"),
@@ -137,7 +137,7 @@ fn decodes_metadata_csv() {
         .with_format(Format::Csv)
         .with_lang(Language::En);
 
-    let response = client.get_metadata(&query).unwrap();
+    let response = client.get_metadata(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -147,8 +147,8 @@ fn decodes_metadata_csv() {
     assert_eq!(response.entries[1].series_code.as_deref(), Some("FXERD01"));
 }
 
-#[test]
-fn rejects_legacy_csv_shape() {
+#[tokio::test]
+async fn rejects_legacy_csv_shape() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/csv_legacy_code_api.csv"),
@@ -162,7 +162,7 @@ fn rejects_legacy_csv_shape() {
         .with_format(Format::Csv)
         .with_lang(Language::En);
 
-    let result = client.get_data_code(&query);
+    let result = client.get_data_code(&query).await;
     let _ = server.finish();
 
     assert!(matches!(result, Err(BojError::DecodeError(_))));

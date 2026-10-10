@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+/// Classification of an HTTP transport failure, shared with Rustopus.
+pub use rustopus::TransportErrorKind;
+
 /// Error type returned by the BOJ client.
 ///
 /// # Examples
@@ -21,8 +24,42 @@ pub enum BojError {
     DecodeError(String),
 
     /// Transport-level failure (network, HTTP client, invalid request shape).
-    #[error("transport error: {0}")]
-    TransportError(String),
+    #[error("transport error ({kind:?}): {message}")]
+    TransportError {
+        /// Whether the failure was a timeout, connection, body, or request failure.
+        kind: TransportErrorKind,
+        /// Diagnostic message from the underlying transport.
+        message: String,
+    },
+
+    /// HTTP failure without a BOJ API error payload.
+    #[error("HTTP {status}")]
+    HttpError {
+        /// HTTP status code.
+        status: u16,
+        /// Response headers preserved for diagnostics.
+        headers: std::collections::BTreeMap<String, String>,
+        /// Raw response bytes preserved for diagnostics.
+        body: Vec<u8>,
+    },
+
+    /// All configured attempts failed.
+    #[error("gave up after {attempts} attempts: {last}")]
+    RetryExhausted {
+        /// Attempts made, including the initial request.
+        attempts: u32,
+        /// Final HTTP, BOJ API, or transport failure.
+        #[source]
+        last: Box<BojError>,
+    },
+
+    /// Total request deadline elapsed, including queueing and retry delays.
+    #[error("total request deadline exceeded")]
+    DeadlineExceeded,
+
+    /// Pagination could not finish safely; no partial result is returned.
+    #[error("incomplete pagination: {0}")]
+    PaginationError(String),
 
     /// API-level error represented by BOJ status and message fields.
     #[error("api error: status={status}, message_id={message_id}, message={message}")]
@@ -73,10 +110,13 @@ impl BojError {
     /// use boj_client::error::BojError;
     ///
     /// let error = BojError::transport("timeout");
-    /// assert!(matches!(error, BojError::TransportError(_)));
+    /// assert!(matches!(error, BojError::TransportError { .. }));
     /// ```
     pub fn transport(message: impl Into<String>) -> Self {
-        Self::TransportError(message.into())
+        Self::TransportError {
+            kind: TransportErrorKind::Other,
+            message: message.into(),
+        }
     }
 
     /// Creates [`BojError::ApiError`].

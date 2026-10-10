@@ -4,8 +4,8 @@ use boj_client::client::BojClient;
 use boj_client::query::{CodeQuery, Format, Frequency, Language, LayerQuery, MetadataQuery};
 use common::{StubResponse, StubServer, fixture_bytes};
 
-#[test]
-fn code_query_builds_stable_url_and_normalizes_case() {
+#[tokio::test]
+async fn code_query_builds_stable_url_and_normalizes_case() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_code_api.json"),
@@ -32,7 +32,7 @@ fn code_query_builds_stable_url_and_normalizes_case() {
     .with_start_position(250)
     .unwrap();
 
-    let _ = client.get_data_code(&query).unwrap();
+    let _ = client.get_data_code(&query).await.unwrap();
 
     let request = server.finish().unwrap();
     assert_eq!(
@@ -41,8 +41,8 @@ fn code_query_builds_stable_url_and_normalizes_case() {
     );
 }
 
-#[test]
-fn layer_query_builds_expected_url() {
+#[tokio::test]
+async fn layer_query_builds_expected_url() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_code_api.json"),
@@ -65,7 +65,7 @@ fn layer_query_builds_expected_url() {
     .with_end_date("202509")
     .unwrap();
 
-    let _ = client.get_data_layer(&query).unwrap();
+    let _ = client.get_data_layer(&query).await.unwrap();
 
     let request = server.finish().unwrap();
     assert_eq!(
@@ -74,8 +74,8 @@ fn layer_query_builds_expected_url() {
     );
 }
 
-#[test]
-fn metadata_query_builds_expected_url() {
+#[tokio::test]
+async fn metadata_query_builds_expected_url() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_metadata_api.json"),
@@ -90,7 +90,7 @@ fn metadata_query_builds_expected_url() {
         .with_format(Format::Csv)
         .with_lang(Language::Jp);
 
-    let _ = client.get_metadata(&query).unwrap();
+    let _ = client.get_metadata(&query).await.unwrap();
 
     let request = server.finish().unwrap();
     assert_eq!(
@@ -99,8 +99,8 @@ fn metadata_query_builds_expected_url() {
     );
 }
 
-#[test]
-fn unknown_db_is_allowed_for_backward_compatibility() {
+#[tokio::test]
+async fn unknown_db_is_allowed_for_backward_compatibility() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_code_api.json"),
@@ -111,7 +111,7 @@ fn unknown_db_is_allowed_for_backward_compatibility() {
         .with_base_url(server.base_url().to_string());
 
     let query = CodeQuery::new("unknown_db", vec!["TK99F1000601GCQ01000".to_string()]).unwrap();
-    let _ = client.get_data_code(&query).unwrap();
+    let _ = client.get_data_code(&query).await.unwrap();
 
     let request = server.finish().unwrap();
     assert_eq!(

@@ -3,7 +3,7 @@ use std::io::Read;
 use flate2::read::GzDecoder;
 
 use crate::error::BojError;
-use crate::transport::HttpResponse;
+use rustopus::Outcome;
 
 use super::http::header_value;
 
@@ -22,12 +22,12 @@ pub(super) fn ensure_success_status(
     Ok(())
 }
 
-pub(super) fn normalize_response_body(response: &HttpResponse) -> Result<Vec<u8>, BojError> {
+pub(super) fn normalize_response_body(response: &Outcome) -> Result<Vec<u8>, BojError> {
     let content_encoding = header_value(response, "content-encoding");
     if let Some(value) = content_encoding
         && value.to_ascii_lowercase().contains("gzip")
     {
-        let mut decoder = GzDecoder::new(response.body.as_slice());
+        let mut decoder = GzDecoder::new(response.body.as_ref());
         let mut decoded = Vec::new();
         decoder
             .read_to_end(&mut decoded)
@@ -35,5 +35,5 @@ pub(super) fn normalize_response_body(response: &HttpResponse) -> Result<Vec<u8>
         return Ok(decoded);
     }
 
-    Ok(response.body.clone())
+    Ok(response.body.to_vec())
 }

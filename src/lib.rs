@@ -2,7 +2,7 @@
 //!
 //! This crate provides:
 //! - request builders for each BOJ endpoint under [`query`],
-//! - a synchronous API client under [`client`],
+//! - an asynchronous, rate-limited API client under [`client`],
 //! - strongly-typed response models under [`model`],
 //! - shared error definitions under [`error`].
 //!
@@ -31,4 +31,8 @@ pub mod model;
 pub mod query;
 
 mod decode;
-mod transport;
+
+/// Async client entry point.
+pub use client::{BojClient, BojResilienceConfig};
+/// HTTP types shared with Rustopus. Use these when injecting a custom client.
+pub use rustopus::reqwest;

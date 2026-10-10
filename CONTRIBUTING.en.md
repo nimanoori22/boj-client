@@ -150,7 +150,7 @@ This is the publication flow under protected-branch operation (PR required). The
    - Input `version`: must match the root `Cargo.toml` version
    - Input `dry_run=true`: run release gate only
    - Input `dry_run=false`: publish to crates.io after the gate passes
-3. If MCP publication is required, run `mcp-release.yml`
-   - Input `version`: must match both `mcp-server/Cargo.toml` and `npm/boj-mcp-server/package.json`
-   - `publish_npm=false`: publish GitHub Release assets only
-   - `publish_npm=true`: publish npm package after assets upload (summary still shows assets status if npm publish fails)
+
+This async branch uses a pinned Git dependency on Rustopus. The crates.io release
+flow is blocked until that dependency is available from a registry; use path/Git
+dependencies for integration in the meantime.

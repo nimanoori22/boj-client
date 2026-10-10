@@ -1,6 +1,3 @@
-use std::thread;
-use std::time::Duration;
-
 use boj_client::client::BojClient;
 use boj_client::error::BojError;
 use boj_client::query::{CodeQuery, Format, Frequency, Language, LayerQuery, MetadataQuery};
@@ -19,9 +16,9 @@ struct ContractCase {
     lang: Language,
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Nightly only: requires live BOJ API and network access"]
-fn live_contract_matrix_all_api_all_formats() {
+async fn live_contract_matrix_all_api_all_formats() {
     if std::env::var("BOJ_CONTRACT_TEST").as_deref() != Ok("1") {
         return;
     }
@@ -52,50 +49,28 @@ fn live_contract_matrix_all_api_all_formats() {
     assert_eq!(cases.len(), 12);
 
     for case in cases {
-        execute_with_retry(|| run_case(&client, case)).unwrap_or_else(|error| {
+        run_case(&client, case).await.unwrap_or_else(|error| {
             panic!("contract case {:?} failed with error: {error}", case);
         });
     }
 }
 
-fn execute_with_retry<F>(mut action: F) -> Result<(), BojError>
-where
-    F: FnMut() -> Result<(), BojError>,
-{
-    let backoff_ms = [200u64, 400u64, 800u64];
-
-    for (attempt, delay_ms) in backoff_ms.iter().enumerate() {
-        match action() {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                let last_attempt = attempt == backoff_ms.len() - 1;
-                if last_attempt || !should_retry(&error) {
-                    return Err(error);
-                }
-                thread::sleep(Duration::from_millis(*delay_ms));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn run_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
+async fn run_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
     match case.api {
-        ApiCase::Code => run_code_case(client, case),
-        ApiCase::Layer => run_layer_case(client, case),
-        ApiCase::Metadata => run_metadata_case(client, case),
+        ApiCase::Code => run_code_case(client, case).await,
+        ApiCase::Layer => run_layer_case(client, case).await,
+        ApiCase::Metadata => run_metadata_case(client, case).await,
     }
 }
 
-fn run_code_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
+async fn run_code_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
     let query = CodeQuery::new("CO", vec!["TK99F1000601GCQ01000".to_string()])?
         .with_format(case.format)
         .with_lang(case.lang)
         .with_start_date("202401")?
         .with_end_date("202401")?;
 
-    let response = client.get_data_code(&query)?;
+    let response = client.get_data_code(&query).await?;
 
     assert_eq!(response.meta.status, 200);
     assert_info_message_id(&response.meta.message_id);
@@ -122,7 +97,7 @@ fn run_code_case(client: &BojClient, case: ContractCase) -> Result<(), BojError>
     Ok(())
 }
 
-fn run_layer_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
+async fn run_layer_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
     let query = LayerQuery::new(
         "BP01",
         Frequency::M,
@@ -133,7 +108,7 @@ fn run_layer_case(client: &BojClient, case: ContractCase) -> Result<(), BojError
     .with_start_date("202504")?
     .with_end_date("202504")?;
 
-    let response = client.get_data_layer(&query)?;
+    let response = client.get_data_layer(&query).await?;
 
     assert_eq!(response.meta.status, 200);
     assert_info_message_id(&response.meta.message_id);
@@ -160,12 +135,12 @@ fn run_layer_case(client: &BojClient, case: ContractCase) -> Result<(), BojError
     Ok(())
 }
 
-fn run_metadata_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
+async fn run_metadata_case(client: &BojClient, case: ContractCase) -> Result<(), BojError> {
     let query = MetadataQuery::new("FM08")?
         .with_format(case.format)
         .with_lang(case.lang);
 
-    let response = client.get_metadata(&query)?;
+    let response = client.get_metadata(&query).await?;
 
     assert_eq!(response.meta.status, 200);
     assert_info_message_id(&response.meta.message_id);
@@ -210,12 +185,4 @@ fn expected_lang(lang: Language) -> &'static str {
 
 fn assert_info_message_id(message_id: &str) {
     assert!(message_id.starts_with("M181") && message_id.ends_with('I'));
-}
-
-fn should_retry(error: &BojError) -> bool {
-    match error {
-        BojError::TransportError(_) => true,
-        BojError::ApiError { status, .. } => *status == 500 || *status == 503,
-        BojError::ValidationError(_) | BojError::DecodeError(_) => false,
-    }
 }

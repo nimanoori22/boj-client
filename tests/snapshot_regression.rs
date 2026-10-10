@@ -6,8 +6,8 @@ use common::{StubResponse, StubServer, fixture_bytes};
 use insta::assert_yaml_snapshot;
 use serde_json::json;
 
-#[test]
-fn request_url_snapshot() {
+#[tokio::test]
+async fn request_url_snapshot() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_code_api.json"),
@@ -32,7 +32,7 @@ fn request_url_snapshot() {
     .with_end_date("202504")
     .unwrap();
 
-    let _ = client.get_data_code(&query).unwrap();
+    let _ = client.get_data_code(&query).await.unwrap();
     let request = server.finish().unwrap();
 
     assert_yaml_snapshot!(
@@ -41,8 +41,8 @@ fn request_url_snapshot() {
     );
 }
 
-#[test]
-fn response_shape_snapshot() {
+#[tokio::test]
+async fn response_shape_snapshot() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_code_api.json"),
@@ -54,7 +54,7 @@ fn response_shape_snapshot() {
 
     let query = CodeQuery::new("CO", vec!["TK99F1000601GCQ01000".to_string()]).unwrap();
 
-    let response = client.get_data_code(&query).unwrap();
+    let response = client.get_data_code(&query).await.unwrap();
     let _ = server.finish();
 
     assert_yaml_snapshot!(

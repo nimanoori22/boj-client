@@ -150,7 +150,7 @@ cargo insta test --force-update-snapshots
    - 入力 `version`: ルート `Cargo.toml` と一致必須
    - 入力 `dry_run=true`: release gate のみ実行
    - 入力 `dry_run=false`: gate 通過後に crates.io publish
-3. MCP公開が必要な場合は `mcp-release.yml` を実行する
-   - 入力 `version`: `mcp-server/Cargo.toml` と `npm/boj-mcp-server/package.json` の両方と一致必須
-   - `publish_npm=false`: GitHub Release assets のみ公開
-   - `publish_npm=true`: assets公開後に npm 公開（失敗時も summary で assets成否を確認可能）
+
+This async branch uses a pinned Git dependency on Rustopus. The crates.io release
+flow is blocked until that dependency is available from a registry; use path/Git
+dependencies for integration in the meantime.

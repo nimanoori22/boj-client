@@ -23,7 +23,3 @@ Cargo.lock
 .vscode/
 *.swp
 *.swo
-
-# Node artifacts
-**/node_modules/
-npm-debug.log*

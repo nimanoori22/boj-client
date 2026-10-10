@@ -1,75 +1,147 @@
+use std::{num::NonZeroU32, time::Duration};
+
+use rustopus::{Arm, Backoff, Quota};
+
 use crate::decode::{decode_code, decode_layer, decode_metadata};
 use crate::error::BojError;
 use crate::model::{CodeResponse, LayerResponse, MetadataResponse};
 use crate::query::{CodeQuery, LayerQuery, MetadataQuery};
-use crate::transport::ReqwestTransport;
+use crate::reqwest;
 
-use super::http::{execute_request, header_value};
+use super::http::{build_url, header_value};
+use super::policy::{BojPolicy, map_arm_error};
+use super::resilience::BojResilienceConfig;
 use super::response::{ensure_success_status, normalize_response_body};
 
-const DEFAULT_BASE_URL: &str = "https://www.stat-search.boj.or.jp";
+/// Production BOJ endpoint origin.
+pub const BOJ_BASE_URL: &str = "https://www.stat-search.boj.or.jp";
 
-/// Synchronous BOJ API client.
+/// Async BOJ API client with retries and shared rate/concurrency limits.
 ///
-/// `BojClient` uses an internal reqwest-based transport. Use [`BojClient::new`]
-/// for defaults or [`BojClient::with_reqwest_client`] to inject a customized
-/// reqwest client.
-///
-/// # Examples
+/// Clones share one Rustopus arm. Construct one client per API and clone it
+/// for concurrent tasks so they all respect the same limits. Methods require
+/// a Tokio runtime; construction does not create or own a runtime.
 ///
 /// ```no_run
-/// use boj_client::client::BojClient;
-/// use boj_client::query::{CodeQuery, Format, Language};
-///
+/// use boj_client::{BojClient, query::{CodeQuery, Format, Language}};
+/// # async fn example() -> Result<(), boj_client::error::BojError> {
 /// let client = BojClient::new()?;
-/// let query = CodeQuery::new("CO", vec!["TK99F1000601GCQ01000".to_string()])?
-///     .with_format(Format::Json)
-///     .with_lang(Language::En)
-///     .with_start_date("202401")?
-///     .with_end_date("202401")?;
-/// let _response = client.get_data_code(&query)?;
-/// # Ok::<(), boj_client::error::BojError>(())
+/// let query = CodeQuery::new("CO", vec!["TK99F1000601GCQ01000".into()])?
+///     .with_format(Format::Json).with_lang(Language::En);
+/// let series = client.get_data_code_all(&query).await?;
+/// # Ok(()) }
 /// ```
+#[derive(Clone)]
 pub struct BojClient {
-    transport: ReqwestTransport,
+    http: reqwest::Client,
+    arm: Arm<BojPolicy>,
     base_url: String,
+    request_timeout: Duration,
+    pub(super) max_pages: usize,
 }
 
 impl BojClient {
-    /// Creates a client with the default reqwest transport and BOJ base URL.
-    ///
-    /// The default transport uses:
-    /// - `User-Agent: boj-client/<crate-version>`
-    /// - request timeout of 30 seconds
+    /// Creates a client with the default resilience configuration.
     ///
     /// # Errors
-    ///
-    /// Returns [`BojError`] when building the internal reqwest client fails.
+    /// Returns an error if the HTTP client cannot be built.
     pub fn new() -> Result<Self, BojError> {
-        let client = ReqwestTransport::build_default_client()?;
+        Self::with_config(BojResilienceConfig::default())
+    }
+
+    /// Creates a default HTTP client with custom resilience settings.
+    ///
+    /// # Errors
+    /// Returns an error for invalid settings or HTTP client construction failure.
+    pub fn with_config(config: BojResilienceConfig) -> Result<Self, BojError> {
+        config.validate()?;
+        let http = reqwest::Client::builder()
+            .user_agent(format!("boj-client/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| BojError::transport(error.to_string()))?;
+        Self::with_client(http, BOJ_BASE_URL, config)
+    }
+
+    /// Creates a client using an injected async HTTP client and endpoint origin.
+    ///
+    /// Proxy and TLS settings come from `http`. Each attempt uses the configured
+    /// request timeout. All endpoints and client clones share one arm.
+    ///
+    /// # Errors
+    /// Returns an error for invalid settings or a base URL without an HTTP(S) host.
+    pub fn with_client(
+        http: reqwest::Client,
+        base_url: impl Into<String>,
+        config: BojResilienceConfig,
+    ) -> Result<Self, BojError> {
+        config.validate()?;
+        let base_url = base_url.into();
+        let url = reqwest::Url::parse(&base_url)
+            .map_err(|error| BojError::validation(format!("invalid base URL: {error}")))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(BojError::validation(
+                "base URL must be HTTP(S) with a host and no query or fragment",
+            ));
+        }
+        let mut builder = Arm::builder()
+            .name("boj")
+            .policy(BojPolicy {
+                max_retry_after: config.max_retry_after,
+            })
+            .suckers(config.max_concurrent_requests)
+            .max_attempts(config.max_attempts)
+            .backoff(Backoff::exponential(config.initial_backoff).cap(config.max_backoff))
+            .total_timeout(config.total_timeout);
+        if let Some(rate) = NonZeroU32::new(config.requests_per_second) {
+            builder = builder.rate(
+                Quota::per_second(rate)
+                    .allow_burst(NonZeroU32::new(config.burst_size).expect("validated burst")),
+            );
+        }
         Ok(Self {
-            transport: ReqwestTransport::new(client),
-            base_url: DEFAULT_BASE_URL.to_string(),
+            arm: builder.build(http.clone()),
+            http,
+            base_url,
+            request_timeout: config.request_timeout,
+            max_pages: config.max_pages,
         })
     }
 
-    /// Creates a client from an existing `reqwest::blocking::Client`.
+    /// Injects an async HTTP client with default resilience settings.
     ///
-    /// This can be used to customize timeout, proxy, TLS, and other reqwest
-    /// settings while keeping the BOJ client API surface stable.
-    pub fn with_reqwest_client(client: reqwest::blocking::Client) -> Self {
-        Self {
-            transport: ReqwestTransport::new(client),
-            base_url: DEFAULT_BASE_URL.to_string(),
-        }
+    /// # Errors
+    /// Returns an error if client configuration is invalid.
+    pub fn with_reqwest_client(http: reqwest::Client) -> Result<Self, BojError> {
+        Self::with_client(http, BOJ_BASE_URL, BojResilienceConfig::default())
     }
 
-    /// Replaces the base URL used for endpoint calls.
-    ///
-    /// This is mainly intended for tests and non-production environments.
+    /// Replaces the endpoint origin, primarily for mock servers.
+    /// Invalid URLs are reported when a request is built.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
+    }
+
+    async fn execute_request(
+        &self,
+        endpoint: &str,
+        query_pairs: Vec<(String, String)>,
+    ) -> Result<rustopus::Outcome, BojError> {
+        let request = self
+            .http
+            .get(build_url(&self.base_url, endpoint, &query_pairs))
+            .header("Accept-Encoding", "gzip")
+            .timeout(self.request_timeout)
+            .build()
+            .map_err(|error| BojError::TransportError {
+                kind: rustopus::TransportErrorKind::Request,
+                message: error.to_string(),
+            })?;
+        self.arm.send(request).await.map_err(map_arm_error)
     }
 
     /// Calls `getDataCode` and decodes the response into [`CodeResponse`].
@@ -78,13 +150,10 @@ impl BojClient {
     ///
     /// Returns [`BojError`] when request sending fails, response decoding fails,
     /// or when BOJ returns `STATUS != 200`.
-    pub fn get_data_code(&self, query: &CodeQuery) -> Result<CodeResponse, BojError> {
-        let response = execute_request(
-            &self.transport,
-            &self.base_url,
-            query.endpoint(),
-            query.query_pairs(),
-        )?;
+    pub async fn get_data_code(&self, query: &CodeQuery) -> Result<CodeResponse, BojError> {
+        let response = self
+            .execute_request(query.endpoint(), query.query_pairs())
+            .await?;
 
         let content_type = header_value(&response, "content-type");
         let body = normalize_response_body(&response)?;
@@ -105,13 +174,10 @@ impl BojClient {
     ///
     /// Returns [`BojError`] when request sending fails, response decoding fails,
     /// or when BOJ returns `STATUS != 200`.
-    pub fn get_data_layer(&self, query: &LayerQuery) -> Result<LayerResponse, BojError> {
-        let response = execute_request(
-            &self.transport,
-            &self.base_url,
-            query.endpoint(),
-            query.query_pairs(),
-        )?;
+    pub async fn get_data_layer(&self, query: &LayerQuery) -> Result<LayerResponse, BojError> {
+        let response = self
+            .execute_request(query.endpoint(), query.query_pairs())
+            .await?;
 
         let content_type = header_value(&response, "content-type");
         let body = normalize_response_body(&response)?;
@@ -132,13 +198,10 @@ impl BojClient {
     ///
     /// Returns [`BojError`] when request sending fails, response decoding fails,
     /// or when BOJ returns `STATUS != 200`.
-    pub fn get_metadata(&self, query: &MetadataQuery) -> Result<MetadataResponse, BojError> {
-        let response = execute_request(
-            &self.transport,
-            &self.base_url,
-            query.endpoint(),
-            query.query_pairs(),
-        )?;
+    pub async fn get_metadata(&self, query: &MetadataQuery) -> Result<MetadataResponse, BojError> {
+        let response = self
+            .execute_request(query.endpoint(), query.query_pairs())
+            .await?;
 
         let content_type = header_value(&response, "content-type");
         let body = normalize_response_body(&response)?;

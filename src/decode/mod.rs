@@ -189,6 +189,21 @@ pub(crate) fn decode_metadata(
     decode_metadata_json(body).or_else(|_| decode_metadata_csv(body, csv_encoding_hint))
 }
 
+// BOJ returns JSON error objects even when the caller requested CSV.
+pub(crate) fn api_error(body: &[u8]) -> Result<Option<BojError>, BojError> {
+    if !common::looks_like_json(body) {
+        return Ok(None);
+    }
+    let text = common::parse_json_text(body)?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| BojError::decode(format!("invalid JSON payload: {error}")))?;
+    let root = value
+        .as_object()
+        .ok_or_else(|| BojError::decode("top-level JSON object is required"))?;
+    let meta = common::parse_meta_from_json_object(root)?;
+    Ok((meta.status != 200).then(|| BojError::api(meta.status, meta.message_id, meta.message)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::common::parse_next_position_from_text;

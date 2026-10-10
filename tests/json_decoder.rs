@@ -5,8 +5,8 @@ use boj_client::error::BojError;
 use boj_client::query::{CodeQuery, Format, Language, MetadataQuery};
 use common::{StubResponse, StubServer, fixture_bytes};
 
-#[test]
-fn parses_success_json_and_normalizes_points() {
+#[tokio::test]
+async fn parses_success_json_and_normalizes_points() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_code_api.json"),
@@ -21,7 +21,7 @@ fn parses_success_json_and_normalizes_points() {
         .with_format(Format::Json)
         .with_lang(Language::En);
 
-    let response = client.get_data_code(&query).unwrap();
+    let response = client.get_data_code(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -36,8 +36,8 @@ fn parses_success_json_and_normalizes_points() {
     assert_eq!(response.series[0].points[1].value, None);
 }
 
-#[test]
-fn parses_success_json_with_no_data() {
+#[tokio::test]
+async fn parses_success_json_with_no_data() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_no_data.json"),
@@ -51,7 +51,7 @@ fn parses_success_json_with_no_data() {
         .with_format(Format::Json)
         .with_lang(Language::En);
 
-    let response = client.get_data_code(&query).unwrap();
+    let response = client.get_data_code(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -59,8 +59,8 @@ fn parses_success_json_with_no_data() {
     assert!(response.series.is_empty());
 }
 
-#[test]
-fn returns_api_error_for_error_json_payload() {
+#[tokio::test]
+async fn returns_api_error_for_error_json_payload() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_error_400_invalid_db.json"),
@@ -74,7 +74,7 @@ fn returns_api_error_for_error_json_payload() {
         .with_format(Format::Json)
         .with_lang(Language::En);
 
-    let error = client.get_data_code(&query).unwrap_err();
+    let error = client.get_data_code(&query).await.unwrap_err();
     let _ = server.finish();
 
     assert_eq!(
@@ -87,8 +87,8 @@ fn returns_api_error_for_error_json_payload() {
     );
 }
 
-#[test]
-fn parses_metadata_json_payload() {
+#[tokio::test]
+async fn parses_metadata_json_payload() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_success_metadata_api.json"),
@@ -102,7 +102,7 @@ fn parses_metadata_json_payload() {
         .with_format(Format::Json)
         .with_lang(Language::En);
 
-    let response = client.get_metadata(&query).unwrap();
+    let response = client.get_metadata(&query).await.unwrap();
     let _ = server.finish();
 
     assert_eq!(response.meta.status, 200);
@@ -112,8 +112,8 @@ fn parses_metadata_json_payload() {
     assert_eq!(response.entries[1].series_code.as_deref(), Some("FXERD01"));
 }
 
-#[test]
-fn rejects_legacy_json_shape() {
+#[tokio::test]
+async fn rejects_legacy_json_shape() {
     let server = StubServer::serve_once(StubResponse::with_content_type(
         200,
         fixture_bytes("tests/fixtures/json_legacy_code_api.json"),
@@ -127,7 +127,7 @@ fn rejects_legacy_json_shape() {
         .with_format(Format::Json)
         .with_lang(Language::En);
 
-    let result = client.get_data_code(&query);
+    let result = client.get_data_code(&query).await;
     let _ = server.finish();
 
     assert!(matches!(result, Err(BojError::DecodeError(_))));

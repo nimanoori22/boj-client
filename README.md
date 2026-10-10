@@ -26,11 +26,12 @@
 
 ## インストール
 
-`crates.io` で公開しています。`Cargo.toml` に追加してください。
+この非同期開発ブランチはパス依存として利用してください。Rustopus の Git 依存を使用しているため、crates.io 公開前にレジストリ依存へ変更する必要があります。公開済みの 0.3.x は従来のAPIです。
 
 ```toml
 [dependencies]
-boj-client = "0.3.0"
+boj-client = { path = "../boj-client" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## 公式情報（参照元）
@@ -57,7 +58,6 @@ boj-client = "0.3.0"
 - [Contributing (English)](./CONTRIBUTING.en.md)
 - [APIマニュアル](./docs/api-manual/README.md)
 - [APIクライアント設計](./docs/design/api-client-versioning.md)
-- [MCPサーバー設計](./docs/design/mcp-server.md)
 - [ライセンス](./LICENSE)
 - [Buy Me a Coffee](https://buymeacoffee.com/explorrrr)
 
@@ -73,7 +73,8 @@ boj-client = "0.3.0"
 use boj_client::client::BojClient;
 use boj_client::query::{CodeQuery, Format, Language};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = BojClient::new()?;
     let query = CodeQuery::new("CO", vec!["TK99F1000601GCQ01000".to_string()])?
         .with_format(Format::Json)
@@ -81,107 +82,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_start_date("202401")?
         .with_end_date("202401")?;
 
-    let _response = client.get_data_code(&query)?;
+    let _response = client.get_data_code(&query).await?;
     Ok(())
 }
 ```
 
-## MCPサーバー（stdio / npx）
+> 非同期クライアントと再試行の説明は以下の英語セクションを参照してください。
 
-このリポジトリには、`boj-client` を MCP 経由で利用するための `boj-mcp-server`（Rustバイナリ）と、`npx` ランチャー `@explorrrr/boj-mcp-server` が同梱されています。
+## Async client and resilience
 
-### 提供ツール
+`BojClient` endpoint methods are now async: add `.await` to existing calls.
+The blocking client has been removed. Run requests inside a Tokio runtime.
 
-- `boj_get_data_code`
-- `boj_get_data_layer`
-- `boj_get_metadata`
-- `boj_list_databases`
-- `boj_get_parameter_catalog`
-- `boj_get_message_catalog`
+`BojClient::with_config(BojResilienceConfig { ..Default::default() })` configures
+rate, burst, concurrency, retry attempts, backoff, request timeout, total page
+deadline, and maximum pages. Defaults are 1 request/second, burst 1, concurrency
+2, 4 attempts, a 30-second attempt timeout, and a 180-second total page deadline.
+The rate is a conservative client setting, not a published BOJ quota.
 
-すべてのツールは `outputSchema` / `annotations` / `execution.taskSupport=forbidden` を公開します。
+Use `BojClient::with_client(http, base_url, config)` to inject proxy/TLS settings
+or a mock endpoint. Build `http` using the re-exported `boj_client::reqwest`.
+Create one client and clone it: all clones share their Rustopus limiter and
+server-directed pauses. HTTP transient errors and BOJ JSON `STATUS=500/503`
+are retried, including gzip errors returned for CSV requests. Permanent API
+errors, malformed payloads, and invalid input fail without retries.
 
-### 追加MCP IF
+`get_data_code` and `get_data_layer` return one page. The async
+`get_data_code_all` and `get_data_layer_all` helpers follow `next_position` and
+return merged series, without raw page bodies. They reject non-advancing cursors,
+conflicting points, and unfinished results at the page limit. If the input
+query has a start position or date filters, completeness covers that selection.
+Each page has its own total deadline; dropping the future cancels waiting and
+in-flight requests. Retry exhaustion preserves the final error and attempt count.
 
-- Prompts:
-  - `boj_discovery_flow`
-  - `boj_fetch_data_code_flow`
-  - `boj_latest_value_flow`
-- Resources:
-  - `boj://guide/call-order`
-  - `boj://guide/input-normalization`
-  - `boj://catalog/databases`
-- Resource templates:
-  - `boj://catalog/parameters/{endpoint}`
-  - `boj://catalog/messages/{status}`
-- Completion:
-  - `db` / `format` / `lang` / `endpoint` / `status` / `frequency`
-
-### npx実行
-
-```bash
-npx -y @explorrrr/boj-mcp-server --help
-```
-
-### ローカル開発実行（Rust）
-
-```bash
-cargo run -p boj-mcp-server
-```
-
-### MCPクライアント設定例（npx）
-
-```json
-{
-  "mcpServers": {
-    "boj": {
-      "command": "npx",
-      "args": ["-y", "@explorrrr/boj-mcp-server"]
-    }
-  }
-}
-```
-
-### ランチャー用環境変数
-
-- `BOJ_MCP_SERVER_PATH`: 既存バイナリを直接使う（ダウンロードをスキップ）
-- `BOJ_MCP_CACHE_DIR`: ダウンロード済みバイナリのキャッシュ先
-- `BOJ_MCP_RELEASE_BASE_URL`: 取得元のReleaseベースURL（既定: `https://github.com/explorrrr/boj-client/releases/download`）
-
-### サポート対象
-
-- `linux-x64`
-- `darwin-x64`
-- `darwin-arm64`
-- `win32-x64`
-
-### メンテナー向けリリース運用
-
-保護ブランチ前提の公式フローは次の通りです。
-
-1. 版上げは必ずPRで実施し、`master` にマージします（workflowで版上げしません）。
-2. `release-publish.yml` を `workflow_dispatch` で実行します。
-   - 入力 `version`: ルート `Cargo.toml` の version と一致必須
-   - 入力 `dry_run=true`: release gate（fmt/clippy/doc/test/doc-test/contract/publish dry-run）のみ実行
-   - 入力 `dry_run=false`: gate 通過後に crates.io へ publish
-3. MCP配布が必要な場合は `mcp-release.yml` を実行します。
-   - 入力 `version`: `mcp-server/Cargo.toml` と `npm/boj-mcp-server/package.json` の両方と一致必須
-   - `publish_npm=false`: GitHub Release assets のみ公開
-   - `publish_npm=true`: assets公開後に npm 公開を実行（npm失敗時も summary で assets成功状態を確認可能）
-
-`release-publish.yml` の crates.io 公開と、`mcp-release.yml` の npm 公開は GitHub Actions OIDC Trusted Publisher を使用するため、`CRATES_IO_TOKEN` / `NPM_TOKEN` は不要です（公開ジョブには `id-token: write` が必要です）。
-
-`include_raw` を `true` にしたときだけ `raw` を返します。  
-`get_data_code` / `get_data_layer` は単ページ返却で、続き取得は `next_position` を指定して再実行してください。
-ツール実行失敗は JSON-RPC エラーではなく `CallToolResult` の `isError=true` と構造化エラーペイロードで返します。
-`format` / `lang` は `JSON` / `JP` のような大文字入力も受理し、内部で小文字正規化します。
-
-推奨呼び出し順（LLM/MCP利用時）:
-
-1. `boj_list_databases` でDB候補を取得
-2. `boj_get_parameter_catalog` で入力制約と上限制約を確認
-3. `boj_get_data_code` / `boj_get_data_layer` / `boj_get_metadata` を実行
-4. 必要に応じて `boj_get_message_catalog` で `MESSAGEID` を参照
+For Winter, map complete series to collected snapshots in a separate adapter;
+BOJ survey dates and series-level last-update dates are not ALFRED vintage
+intervals. See [Winter integration](./docs/design/winter-integration.md).
 
 ## 公開APIノート（0.3.0）
 
@@ -233,4 +169,4 @@ cargo run -p boj-mcp-server
 
 MIT License。詳細は [`LICENSE`](./LICENSE) を参照してください。
 
-Last updated: 2026-02-19
+Last updated: 2026-10-09

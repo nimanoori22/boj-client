@@ -26,11 +26,14 @@ An unofficial Rust API client for the Bank of Japan Time-Series Statistics Data 
 
 ## Installation
 
-The crate is available on `crates.io`. Add this to your `Cargo.toml`:
+For this async development branch, add a path dependency to `Cargo.toml`:
+The pinned Rustopus Git dependency must become a registry dependency before
+this branch can be published to crates.io. Published 0.3.x releases use the old API.
 
 ```toml
 [dependencies]
-boj-client = "0.3.0"
+boj-client = { path = "../boj-client" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## Official references
@@ -57,7 +60,6 @@ boj-client = "0.3.0"
 - [Contributing (Japanese)](./CONTRIBUTING.md)
 - [API manual](./docs/api-manual/README.md)
 - [API client design](./docs/design/api-client-versioning.md)
-- [MCP server design](./docs/design/mcp-server.md)
 - [License](./LICENSE)
 - [Buy Me a Coffee](https://buymeacoffee.com/explorrrr)
 
@@ -73,7 +75,8 @@ Response types are separated by API:
 use boj_client::client::BojClient;
 use boj_client::query::{CodeQuery, Format, Language};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = BojClient::new()?;
     let query = CodeQuery::new("CO", vec!["TK99F1000601GCQ01000".to_string()])?
         .with_format(Format::Json)
@@ -81,107 +84,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_start_date("202401")?
         .with_end_date("202401")?;
 
-    let _response = client.get_data_code(&query)?;
+    let _response = client.get_data_code(&query).await?;
     Ok(())
 }
 ```
 
-## MCP Server (stdio / npx)
+## Async client and resilience
 
-This repository includes both the Rust MCP server binary `boj-mcp-server` and the `npx` launcher package `@explorrrr/boj-mcp-server`.
+`BojClient` endpoint methods are now async: add `.await` to existing calls.
+The blocking client has been removed. Run requests inside a Tokio runtime.
 
-### Available tools
+`BojClient::with_config(BojResilienceConfig { ..Default::default() })` configures
+rate, burst, concurrency, retry attempts, backoff, request timeout, total page
+deadline, and maximum pages. Defaults are 1 request/second, burst 1, concurrency
+2, 4 attempts, a 30-second attempt timeout, and a 180-second total page deadline.
+The rate is a conservative client setting, not a published BOJ quota.
 
-- `boj_get_data_code`
-- `boj_get_data_layer`
-- `boj_get_metadata`
-- `boj_list_databases`
-- `boj_get_parameter_catalog`
-- `boj_get_message_catalog`
+Use `BojClient::with_client(http, base_url, config)` to inject proxy/TLS settings
+or a mock endpoint. Build `http` using the re-exported `boj_client::reqwest`.
+Create one client and clone it: all clones share their Rustopus limiter and
+server-directed pauses. HTTP transient errors and BOJ JSON `STATUS=500/503`
+are retried, including gzip errors returned for CSV requests. Permanent API
+errors, malformed payloads, and invalid input fail without retries.
 
-Every tool exposes `outputSchema`, `annotations`, and `execution.taskSupport=forbidden`.
+`get_data_code` and `get_data_layer` return one page. The async
+`get_data_code_all` and `get_data_layer_all` helpers follow `next_position` and
+return merged series, without raw page bodies. They reject non-advancing cursors,
+conflicting points, and unfinished results at the page limit. If the input
+query has a start position or date filters, completeness covers that selection.
+Each page has its own total deadline; dropping the future cancels waiting and
+in-flight requests. Retry exhaustion preserves the final error and attempt count.
 
-### Additional MCP interfaces
-
-- Prompts:
-  - `boj_discovery_flow`
-  - `boj_fetch_data_code_flow`
-  - `boj_latest_value_flow`
-- Resources:
-  - `boj://guide/call-order`
-  - `boj://guide/input-normalization`
-  - `boj://catalog/databases`
-- Resource templates:
-  - `boj://catalog/parameters/{endpoint}`
-  - `boj://catalog/messages/{status}`
-- Completion:
-  - `db` / `format` / `lang` / `endpoint` / `status` / `frequency`
-
-### Run with npx
-
-```bash
-npx -y @explorrrr/boj-mcp-server --help
-```
-
-### Run locally (Rust development)
-
-```bash
-cargo run -p boj-mcp-server
-```
-
-### MCP client config example (npx)
-
-```json
-{
-  "mcpServers": {
-    "boj": {
-      "command": "npx",
-      "args": ["-y", "@explorrrr/boj-mcp-server"]
-    }
-  }
-}
-```
-
-### Launcher environment variables
-
-- `BOJ_MCP_SERVER_PATH`: use an existing local binary directly (skip download)
-- `BOJ_MCP_CACHE_DIR`: cache directory for downloaded binaries
-- `BOJ_MCP_RELEASE_BASE_URL`: release download base URL (default: `https://github.com/explorrrr/boj-client/releases/download`)
-
-### Supported targets
-
-- `linux-x64`
-- `darwin-x64`
-- `darwin-arm64`
-- `win32-x64`
-
-### Maintainer release flow
-
-The official flow (with protected branch rules) is:
-
-1. Always bump versions in a PR, then merge into `master` (no workflow-driven version bump).
-2. Run `release-publish.yml` via `workflow_dispatch`.
-   - Input `version`: must match the root `Cargo.toml` version
-   - Input `dry_run=true`: run release gate only (fmt/clippy/doc/test/doc-test/contract/publish dry-run)
-   - Input `dry_run=false`: publish to crates.io after the gate passes
-3. If MCP distribution is required, run `mcp-release.yml`.
-   - Input `version`: must match both `mcp-server/Cargo.toml` and `npm/boj-mcp-server/package.json`
-   - `publish_npm=false`: publish GitHub Release assets only
-   - `publish_npm=true`: publish npm package after assets upload (workflow summary still shows assets success when npm publish fails)
-
-Both crates.io publication in `release-publish.yml` and npm publication in `mcp-release.yml` use GitHub Actions OIDC trusted publishing, so `CRATES_IO_TOKEN` / `NPM_TOKEN` are not required (`id-token: write` is required for publish jobs).
-
-`raw` is returned only when `include_raw=true`.  
-`get_data_code` and `get_data_layer` are single-page responses; use `next_position` to request the next page.
-Tool execution failures are returned as `CallToolResult` with `isError=true` and structured error payloads (instead of JSON-RPC errors).
-`format` / `lang` also accept uppercase inputs such as `JSON` / `JP` and are normalized internally.
-
-Recommended call order for LLM/MCP usage:
-
-1. `boj_list_databases` to discover DB candidates
-2. `boj_get_parameter_catalog` to inspect parameter and limit constraints
-3. `boj_get_data_code` / `boj_get_data_layer` / `boj_get_metadata` for data retrieval
-4. `boj_get_message_catalog` to resolve `MESSAGEID` details when needed
+For Winter, map complete series to collected snapshots in a separate adapter;
+BOJ survey dates and series-level last-update dates are not ALFRED vintage
+intervals. See [Winter integration](./docs/design/winter-integration.md).
 
 ## Public API Notes (0.3.0)
 
@@ -228,4 +164,4 @@ The project is still under active development. For behavior details, prioritize 
 
 MIT License. See [`LICENSE`](./LICENSE) for details.
 
-Last updated: 2026-02-19
+Last updated: 2026-10-09

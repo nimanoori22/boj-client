@@ -1,24 +1,3 @@
-use std::collections::HashMap;
-
-use crate::transport::{HttpRequest, HttpResponse, Transport};
-
-pub(super) fn execute_request<T: Transport>(
-    transport: &T,
-    base_url: &str,
-    endpoint: &str,
-    query_pairs: Vec<(String, String)>,
-) -> Result<HttpResponse, crate::error::BojError> {
-    let url = build_url(base_url, endpoint, &query_pairs);
-    let mut headers = HashMap::new();
-    headers.insert("Accept-Encoding".to_string(), "gzip".to_string());
-
-    transport.send(HttpRequest {
-        method: "GET".to_string(),
-        url,
-        headers,
-    })
-}
-
 pub(super) fn build_url(
     base_url: &str,
     endpoint: &str,
@@ -44,13 +23,13 @@ pub(super) fn build_url(
     url
 }
 
-pub(super) fn header_value(response: &HttpResponse, header_name: &str) -> Option<String> {
-    for (key, value) in &response.headers {
-        if key.eq_ignore_ascii_case(header_name) {
-            return Some(value.clone());
-        }
-    }
-    None
+pub(super) fn header_value(response: &rustopus::Outcome, header_name: &str) -> Option<String> {
+    response
+        .headers
+        .get(header_name)?
+        .to_str()
+        .ok()
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
